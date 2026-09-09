@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: colis-cotonou
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: cd frontend && npm install && npm run build && cd ../backend && npm install
+    startCommand: cd backend && npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        value: admin@chrono.bj
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: FEDAPAY_SECRET_KEY
+        sync: false
+      - key: FEDAPAY_ENV
+        value: sandbox
+      - key: FEDAPAY_WEBHOOK_SECRET
+        sync: false
+      - key: OSRM_URL
+        value: https://router.project-osrm.org

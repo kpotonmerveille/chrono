@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+:root {
+  --color-brand: #e07a2c;
+  --color-brand-dark: #b85f1e;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background-color: #faf7f2;
+}
+
+.leaflet-container {
+  border-radius: 0.75rem;
+  z-index: 0;
+}

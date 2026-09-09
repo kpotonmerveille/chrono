@@ -1,0 +1,65 @@
+{
+  "expo": {
+    "name": "Chrono",
+    "slug": "chrono-mobile",
+    "scheme": "chrono",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "primaryColor": "#f97316",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f97316"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.chronocotonou.mobile",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Chrono utilise votre position pendant une course active pour la partager en direct avec le client.",
+        "NSCameraUsageDescription": "Chrono utilise l'appareil photo pour prendre une photo de votre pièce d'identité à envoyer pour vérification.",
+        "NSPhotoLibraryUsageDescription": "Chrono a besoin d'accéder à vos photos pour envoyer une image de votre pièce d'identité."
+      }
+    },
+    "android": {
+      "package": "com.chronocotonou.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#f97316",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "REMPLACER_PAR_UNE_CLE_GOOGLE_MAPS_API_EN_PRODUCTION"
+        }
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Chrono utilise votre position pendant une course active pour la partager en direct avec le client."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Chrono a besoin d'accéder à vos photos pour envoyer une image de votre pièce d'identité.",
+          "cameraPermission": "Chrono utilise l'appareil photo pour prendre une photo de votre pièce d'identité à envoyer pour vérification."
+        }
+      ]
+    ]
+  }
+}
