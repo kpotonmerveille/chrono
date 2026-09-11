@@ -9,7 +9,7 @@ construira le site (React) et l'API (Node) ensemble, et tout sera servi
 depuis une seule adresse (`https://colis-cotonou-xxxx.onrender.com`).
 
 > **Note sur cette version démo** : sur le plan gratuit de Render, les
-> données (utilisateurs, livraisons, **et les pièces d'identité envoyées par
+> données (utilisateurs, livraisons, **et les documents (pièce d'identité, papiers de la moto) envoyés par
 > les livreurs**) sont réinitialisées à chaque redéploiement, et le service
 > se met en veille après 15 minutes d'inactivité (le premier chargement après
 > une pause peut prendre 30-50 secondes). C'est très bien pour montrer
@@ -89,7 +89,7 @@ avant de builder l'app.
 ## Pour aller plus loin (quand tu seras prêt à passer en vrai)
 
 - **Base de données durable** : remplacer SQLite par une base PostgreSQL managée (Render en propose une gratuite pendant 90 jours, puis payante) pour ne plus perdre les données à chaque redéploiement.
-- **Disque persistant pour les documents** : ajouter un disque Render persistant monté sur `backend/uploads` pour que les pièces d'identité des livreurs survivent aux redéploiements.
+- **Disque persistant pour les documents** : ajouter un disque Render persistant monté sur `backend/uploads` pour que les documents des livreurs (pièce d'identité, papiers de la moto) survivent aux redéploiements.
 - **Nom de domaine personnalisé** : Render permet de brancher un domaine comme `www.coliscotonou.bj` sur le service (payant, dépend du plan).
 - **Publier l'app mobile sur les stores** : voir `mobile/README.md` pour les étapes (comptes développeur Apple/Google requis, à créer par toi).
 

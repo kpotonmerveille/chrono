@@ -4,6 +4,8 @@ import { Text } from 'react-native';
 import NewDeliveryScreen from '../screens/client/NewDeliveryScreen';
 import MyDeliveriesScreen from '../screens/client/MyDeliveriesScreen';
 import DeliveryDetailScreen from '../screens/client/DeliveryDetailScreen';
+import WalletScreen from '../screens/client/WalletScreen';
+import FloodAlertsScreen from '../screens/client/FloodAlertsScreen';
 import { colors } from '../lib/theme';
 
 const Stack = createNativeStackNavigator();
@@ -48,6 +50,16 @@ export default function ClientNavigator() {
         name="MesLivraisonsTab"
         component={MesLivraisonsStack}
         options={{ title: 'Mes livraisons', tabBarIcon: ({ color }) => <Text style={{ color, fontSize: 18 }}>📦</Text> }}
+      />
+      <Tab.Screen
+        name="PortefeuilleTab"
+        component={WalletScreen}
+        options={{ title: 'Portefeuille', tabBarIcon: ({ color }) => <Text style={{ color, fontSize: 18 }}>💰</Text> }}
+      />
+      <Tab.Screen
+        name="RoutesTab"
+        component={FloodAlertsScreen}
+        options={{ title: 'Routes', tabBarIcon: ({ color }) => <Text style={{ color, fontSize: 18 }}>🌊</Text> }}
       />
     </Tab.Navigator>
   );

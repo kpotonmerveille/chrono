@@ -3,6 +3,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { colors } from '../lib/theme';
 import { ROLE_LABEL } from '../lib/labels';
+import SOSButton from './SOSButton';
 
 // Bandeau supérieur affiché sur chaque écran, équivalent de
 // frontend/src/components/Navbar.jsx (logo Chrono + utilisateur + déconnexion).
@@ -20,9 +21,12 @@ export default function TopBar({ backLabel, onBack }) {
           <Text style={styles.brandText}>Chrono</Text>
         </View>
         {user && (
-          <TouchableOpacity onPress={logout} style={styles.logoutBtn} activeOpacity={0.7}>
-            <Text style={styles.logoutText}>Déconnexion</Text>
-          </TouchableOpacity>
+          <View style={styles.rightActions}>
+            {user.role === 'livreur' && <SOSButton />}
+            <TouchableOpacity onPress={logout} style={styles.logoutBtn} activeOpacity={0.7}>
+              <Text style={styles.logoutText}>Déconnexion</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
       {user && (
@@ -49,6 +53,7 @@ const styles = StyleSheet.create({
   },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  rightActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   logoDot: {
     height: 30,
     width: 30,

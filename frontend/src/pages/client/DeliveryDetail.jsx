@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api, { apiErrorMessage } from '../../lib/api';
 import Navbar from '../../components/Navbar';
@@ -85,6 +85,174 @@ function PayPanel({ delivery, onPaid }) {
         {loading ? 'Paiement en cours...' : `Payer ${delivery.price} FCFA`}
       </button>
       <p className="text-[11px] text-orange-700/70">Paiement sécurisé via FedaPay (Mobile Money / carte). Vous serez redirigé vers la page de paiement.</p>
+    </form>
+  );
+}
+
+// "Suivi sans app" : lien public à partager par SMS/WhatsApp, sans compte ni
+// installation pour la personne qui le reçoit.
+function ShareTrackingPanel({ delivery }) {
+  const [copied, setCopied] = useState(false);
+  if (!delivery.share_token) return null;
+  const url = `${window.location.origin}/suivi/${delivery.share_token}`;
+  const waText = encodeURIComponent(`Suivez votre colis Chrono en direct, sans app : ${url}`);
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* copie manuelle si l'API presse-papier est indisponible */
+    }
+  }
+
+  return (
+    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 space-y-2">
+      <p className="text-sm font-medium text-emerald-900">📤 Partager le suivi (sans app, sans compte)</p>
+      <p className="text-xs text-emerald-700/80">Envoyez ce lien au destinataire ou à un proche pour qu'il suive la course en direct.</p>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={copyLink} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-100 transition">
+          {copied ? '✅ Copié !' : '🔗 Copier le lien'}
+        </button>
+        <a href={`https://wa.me/?text=${waText}`} target="_blank" rel="noopener noreferrer" className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-green-500 text-white hover:bg-green-600 transition">
+          WhatsApp
+        </a>
+        <a href={`sms:?body=${waText}`} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-100 transition">
+          SMS
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// Enregistrement d'une note vocale (repère, instructions) via le micro du
+// navigateur — remplace/complète une adresse écrite précise. Lecture de la
+// note existante via une requête authentifiée (fichier protégé, d'où le blob).
+function VoiceNoteRecorder({ deliveryId, point, label, existingPath, onUploaded }) {
+  const [recording, setRecording] = useState(false);
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+
+  useEffect(() => {
+    if (!existingPath) { setAudioUrl(null); return undefined; }
+    let cancelled = false;
+    let objectUrl;
+    api.get(`/deliveries/${deliveryId}/note-vocale/${point}`, { responseType: 'blob' })
+      .then((res) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(res.data);
+        setAudioUrl(objectUrl);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [deliveryId, point, existingPath]);
+
+  async function upload(blob) {
+    setUploading(true);
+    setError('');
+    try {
+      const formData = new FormData();
+      formData.append('note', blob, `note-${point}.webm`);
+      await api.post(`/deliveries/${deliveryId}/note-vocale/${point}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await onUploaded();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function startRecording() {
+    setError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        upload(blob);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch {
+      setError("Impossible d'accéder au micro. Vérifiez les autorisations de votre navigateur.");
+    }
+  }
+
+  function stopRecording() {
+    mediaRecorderRef.current?.stop();
+    setRecording(false);
+  }
+
+  return (
+    <div className="bg-slate-50 rounded-lg p-3 space-y-2">
+      <p className="text-sm text-slate-600">🎙️ {label}</p>
+      {audioUrl && <audio controls src={audioUrl} className="w-full h-9" />}
+      <div className="flex items-center gap-2 flex-wrap">
+        {!recording ? (
+          <button type="button" onClick={startRecording} disabled={uploading} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-900 transition disabled:opacity-50">
+            {audioUrl ? '🔴 Réenregistrer' : '🔴 Enregistrer une note vocale'}
+          </button>
+        ) : (
+          <button type="button" onClick={stopRecording} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 transition animate-pulse">
+            ⏹️ Arrêter l'enregistrement
+          </button>
+        )}
+        {uploading && <span className="text-xs text-slate-400">Envoi...</span>}
+      </div>
+      {error && <p className="text-xs text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+// Garantie colis : le client peut signaler un problème (cassé, perdu) une
+// fois la livraison terminée, uniquement si elle était assurée.
+function ClaimPanel({ delivery, onDone }) {
+  const [description, setDescription] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  if (!delivery.insured) return null;
+
+  if (delivery.claim_status === 'en_cours') {
+    return <p className="text-sm text-amber-800 bg-amber-50 rounded-lg px-3 py-2">🛡️ Réclamation en cours d'examen par l'équipe Chrono.</p>;
+  }
+  if (delivery.claim_status === 'rembourse') {
+    return <p className="text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">🛡️ Réclamation acceptée : remboursement en cours.{delivery.claim_note ? ` (${delivery.claim_note})` : ''}</p>;
+  }
+  if (delivery.claim_status === 'refuse') {
+    return <p className="text-sm text-red-700 bg-red-50 rounded-lg px-3 py-2">🛡️ Réclamation refusée.{delivery.claim_note ? ` Motif : ${delivery.claim_note}` : ''}</p>;
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const res = await api.post(`/deliveries/${delivery.id}/reclamation`, { description });
+      onDone(res.data.delivery);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+      <p className="text-sm font-medium text-slate-900">🛡️ Un souci avec ce colis assuré (cassé, perdu...) ?</p>
+      <textarea required value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Décrivez le problème rencontré" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" rows={2} />
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      <button disabled={loading} type="submit" className="text-sm font-semibold px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800 transition disabled:opacity-60">
+        {loading ? 'Envoi...' : 'Signaler un problème'}
+      </button>
     </form>
   );
 }
@@ -198,8 +366,24 @@ export default function DeliveryDetail() {
               <PaymentBadge status={delivery.payment_status} />
               <ZoneBadge zone={delivery.zone} />
               <DelaiBadge delaiGaranti={!!delivery.delai_garanti} />
+              {!!delivery.group_id && <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">🔗 Groupée</span>}
             </div>
           </div>
+
+          {delivery.return_status === 'demande' && (
+            <div className="bg-red-50 border border-red-100 rounded-xl p-4 space-y-1">
+              <p className="text-sm font-medium text-red-900">↩️ Retour en cours — le destinataire a refusé le colis</p>
+              <p className="text-sm text-red-800">Motif indiqué par le livreur : {delivery.return_reason}</p>
+              <p className="text-xs text-red-700/80">
+                Le livreur vous rapporte le colis. Frais de retour à régler en espèces au livreur : <strong>{delivery.return_fee} FCFA</strong>.
+              </p>
+            </div>
+          )}
+          {delivery.return_status === 'retournee' && (
+            <p className="text-sm text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
+              ↩️ Ce colis a été retourné le {delivery.return_completed_at ? new Date(delivery.return_completed_at).toLocaleString('fr-FR') : ''} — le destinataire l'avait refusé.
+            </p>
+          )}
 
           <StepTimeline status={delivery.status} />
 
@@ -216,6 +400,9 @@ export default function DeliveryDetail() {
               {!delivery.delai_garanti && (
                 <p className="text-xs text-amber-700 mt-1">Zone longue distance : la livraison en 30 min n'est pas garantie sur ce trajet.</p>
               )}
+              {!!delivery.group_discount && (
+                <p className="text-xs text-purple-700 mt-1">🔗 Dont {delivery.group_discount} FCFA économisés en rejoignant une livraison compagnon</p>
+              )}
             </div>
             {delivery.livreur_name && (
               <div className="bg-slate-50 rounded-lg p-3 sm:col-span-2">
@@ -225,8 +412,14 @@ export default function DeliveryDetail() {
             )}
           </div>
 
-          {delivery.payment_status !== 'paye' && delivery.status === 'en_attente' && (
+          {delivery.status !== 'annulee' && <ShareTrackingPanel delivery={delivery} />}
+
+          {delivery.payer_type === 'expediteur' && delivery.payment_status !== 'paye' && delivery.status === 'en_attente' && (
             <PayPanel delivery={delivery} onPaid={setDelivery} />
+          )}
+
+          {delivery.payer_type === 'destinataire' && delivery.payment_status !== 'paye' && !['livree', 'annulee'].includes(delivery.status) && (
+            <p className="text-sm text-slate-500 bg-slate-50 rounded-lg px-3 py-2">💰 Paiement à la réception : le destinataire règle via le lien de suivi partagé ci-dessus.</p>
           )}
 
           {delivery.payment_status === 'paye' && !['livree', 'annulee'].includes(delivery.status) && (
@@ -237,12 +430,20 @@ export default function DeliveryDetail() {
             </div>
           )}
 
+          {!['livree', 'annulee'].includes(delivery.status) && (
+            <div className="grid sm:grid-cols-2 gap-3">
+              <VoiceNoteRecorder deliveryId={delivery.id} point="retrait" label="Note vocale — retrait" existingPath={delivery.pickup_voice_note_path} onUploaded={load} />
+              <VoiceNoteRecorder deliveryId={delivery.id} point="livraison" label="Note vocale — livraison" existingPath={delivery.dropoff_voice_note_path} onUploaded={load} />
+            </div>
+          )}
+
           {['en_attente', 'acceptee'].includes(delivery.status) && (
             <button onClick={handleCancel} disabled={cancelling} className="text-sm text-red-600 hover:underline disabled:opacity-60">
               {cancelling ? 'Annulation...' : 'Annuler la livraison'}
             </button>
           )}
 
+          {delivery.status === 'livree' && <ClaimPanel delivery={delivery} onDone={setDelivery} />}
           {delivery.status === 'livree' && <ReviewPanel delivery={delivery} onDone={load} />}
         </div>
       </main>

@@ -13,15 +13,84 @@ reste sur le site web) :
   d'oiseau), paie via FedaPay (Mobile Money / carte), suit le livreur **en
   direct sur la carte** pendant la course, reçoit un code de confirmation,
   note le livreur.
-- **Livreur** : envoie une pièce d'identité (photo/scan) qui doit être
-  approuvée par l'administration avant de pouvoir travailler, se déclare
-  disponible, accepte des courses (avec le montant net qu'il touchera
-  affiché clairement), fait progresser le statut, partage sa position GPS
-  en direct pendant la course, confirme la remise avec le code donné par le
-  destinataire.
+- **Livreur** : envoie sa pièce d'identité **et les documents de sa moto**
+  (carte grise, assurance, permis de conduire, photo de la moto) — les 5
+  doivent être approuvés par l'administration avant de pouvoir travailler —
+  se déclare disponible, accepte des courses (avec le montant net qu'il
+  touchera affiché clairement), fait progresser le statut, partage sa
+  position GPS en direct pendant la course, confirme la remise avec le code
+  donné par le destinataire.
 - **Administrateur** : tableau de bord (statistiques, revenus, répartition
-  par zone), examine et approuve/refuse les pièces d'identité des livreurs,
-  supervise toutes les livraisons.
+  par zone), examine et approuve/refuse individuellement la pièce
+  d'identité et chaque document véhicule d'un livreur, supervise toutes les
+  livraisons, est alerté dès qu'une course reste impayée plus de 15
+  minutes (bandeau + onglet dédié avec numéro à appeler), et reçoit une
+  **alarme sonore + la position GPS exacte en temps réel** dès qu'un
+  livreur déclenche une alerte SOS (danger ou panne).
+
+## Fonctionnalités différenciantes (jamais vues au Bénin / en Afrique francophone)
+
+Onze fonctionnalités conçues pour démarquer Chrono de Yango/Gozem, disponibles
+sur le web **et** sur l'application mobile :
+
+1. **Suivi sans app** : chaque livraison génère un lien public
+   (`/suivi/<token>`) que le client partage par SMS/WhatsApp à qui il veut —
+   suivi en direct sur la carte, sans compte ni installation. Voir
+   `backend/src/routes/public.js`.
+2. **Adressage par repères + note vocale** : les champs d'adresse acceptent un
+   repère écrit ("en face de la pharmacie du carrefour") et une courte note
+   vocale enregistrée depuis le téléphone peut être jointe au retrait et/ou à
+   la livraison, pour guider le livreur.
+3. **Paiement à la réception** : le client choisit qui paie — lui à la
+   création, ou le destinataire au moment de la livraison via le lien de
+   suivi public.
+4. **Garantie colis** : assurance optionnelle (+150 FCFA) avec réclamation en
+   un clic si le colis arrive cassé ou perdu, examinée par l'admin
+   (remboursement ou refus).
+5. **Chrono Pro pour commerçants** : un client peut se déclarer commerçant
+   (site web, onglet "Mon compte") pour préremplir son adresse de retrait en
+   un clic à chaque nouvelle livraison, avec un carnet d'adresses favorites.
+   Une vitrine publique (`/boutique/<slug>`) affiche ses infos de retrait.
+6. **Avance sur gains livreur** : un livreur peut demander une avance sur ce
+   qu'il a déjà gagné dans la journée, avant la fin de journée — le
+   versement Mobile Money réel reste géré manuellement par l'admin (pas
+   d'API de paiement sortant intégrée pour l'instant).
+7. **Alerte SOS livreur** : bouton "🚨 SOS" toujours visible pour un livreur
+   connecté (danger ou panne), qui envoie instantanément sa position GPS
+   exacte à l'administrateur — alarme sonore continue (Web Audio API, sans
+   fichier audio à héberger) et bandeau rouge persistant sur le tableau de
+   bord admin, avec un lien Google Maps vers la position et le numéro du
+   livreur à appeler, pour envoyer la police ou une équipe de dépannage.
+   Voir `backend/src/routes/alertes.js`.
+8. **Livraison groupée (course partagée)** : quand un client crée une demande,
+   l'app détecte automatiquement si un autre client a déjà une demande
+   compatible en attente (même zone, points de retrait à moins de 1,2 km,
+   créée il y a moins de 20 min) et propose de la rejoindre pour **30% de
+   réduction** — jusqu'à 3 colis par groupe. Le prix de la première demande
+   n'est jamais recalculé : seul celui qui rejoint profite de la réduction. Le
+   livreur qui accepte une course groupée récupère automatiquement tous les
+   colis payés du groupe. Voir `findGroupableCandidate` dans
+   `backend/src/routes/deliveries.js`.
+9. **Retour automatique si le destinataire refuse** : le livreur peut signaler
+   en un clic (avec motif) qu'un destinataire refuse son colis une fois qu'il
+   l'a récupéré ; l'app calcule des frais de retour (50% du prix), affichés
+   au client et au livreur, **à régler en espèces au livreur** (pas encore
+   intégrés à FedaPay). La livraison est alors clôturée comme "retournée"
+   plutôt que "livrée".
+10. **Portefeuille Chrono (solde prépayé)** : le client peut recharger un
+    solde une fois (Mobile Money/carte, via le même circuit FedaPay que les
+    livraisons) puis payer ses livraisons suivantes instantanément avec ce
+    solde, sans repasser par Mobile Money à chaque course — pratique pour un
+    client Chrono Pro qui envoie plusieurs colis par jour.
+11. **Alerte route inondée** : en saison des pluies, certains axes de
+    Cotonou deviennent impraticables — aucune donnée fiable n'existe pour le
+    détecter automatiquement, donc client et livreur peuvent signaler
+    manuellement un point inondé (position sur la carte + motif). L'alerte
+    est visible de tous (onglet "🌊 Routes"), reste affichée quelques heures
+    (voir `FLOOD_ALERT_TTL_HOURS`) ou jusqu'à ce que son auteur la lève, et
+    déclenche un avertissement non bloquant à la création d'une livraison
+    si le retrait ou la livraison passe à proximité (rayon de 1,5 km, voir
+    `FLOOD_ALERT_RADIUS_KM`). Voir `backend/src/routes/inondations.js`.
 
 ## Le modèle économique (validé le 08/09/2026)
 
@@ -52,7 +121,7 @@ réel, en option ("livreur premium") plutôt qu'en passage obligé.
 
 | Problème | Réponse dans l'app |
 |---|---|
-| Sécurité | Pièce d'identité obligatoire, examinée et approuvée par l'admin avant activation du livreur ; code de confirmation à 4 chiffres obligatoire pour clôturer chaque livraison (évite vol/erreur de destinataire) ; paiement en ligne via FedaPay (moins de manipulation de cash) |
+| Sécurité | Pièce d'identité **et documents de la moto** (carte grise, assurance, permis, photo) obligatoires, examinés et approuvés individuellement par l'admin avant activation du livreur ; code de confirmation à 4 chiffres obligatoire pour clôturer chaque livraison (évite vol/erreur de destinataire) ; paiement en ligne via FedaPay (moins de manipulation de cash) ; **alerte SOS livreur** (danger/panne) avec position GPS exacte envoyée en direct à l'admin |
 | Disponibilité | Les livreurs basculent leur statut disponible/indisponible ; le client ne voit que des livreurs vérifiés et actifs |
 | Rapidité | Mise en relation immédiate : dès qu'une demande est payée, elle apparaît chez tous les livreurs disponibles, premier arrivé premier servi ; prix fixe affiché instantanément (distance routière réelle), aucune négociation |
 | Promptitude | Suivi de statut **et de position GPS en direct** (créée → acceptée → récupérée → en route → livrée), avec horodatage à chaque étape ; garantie 30 min affichée uniquement quand elle est tenable (zones courte et moyenne) |
@@ -103,8 +172,8 @@ développement redirige automatiquement les appels `/api` vers le backend).
 
 ### 3. Utilisation
 
-1. Créez un compte **livreur** (`/inscription?role=livreur`), puis envoyez une pièce d'identité depuis son tableau de bord (photo/scan).
-2. Connectez-vous en tant qu'**admin**, ouvrez l'onglet "Livreurs", consultez le document ("Voir") et cliquez "Approuver" (ou "Refuser" avec un motif).
+1. Créez un compte **livreur** (`/inscription?role=livreur`), puis envoyez depuis son tableau de bord sa pièce d'identité et les 4 documents de sa moto (carte grise, assurance, permis, photo).
+2. Connectez-vous en tant qu'**admin**, ouvrez l'onglet "Livreurs", cliquez "Voir détails" pour examiner chaque document ("Voir") et cliquez "Approuver" (ou "Refuser" avec un motif) — le compte n'est activé que lorsque les 5 documents sont approuvés.
 3. Le livreur se connecte et passe en "Disponible".
 4. Créez un compte **client**, faites une demande de livraison (placez les points sur la carte pour une zone précise et une distance routière réelle), payez.
 5. Le livreur voit la course dans "Disponibles" avec le montant net qu'il touchera, l'accepte, met à jour le statut. Sa position GPS est alors partagée en direct.
@@ -124,6 +193,34 @@ dev/démo). Pour activer le vrai paiement :
 
 Voir `DEPLOIEMENT.md` pour la configuration sur Render.
 
+### Comment circule l'argent aujourd'hui (à lire avant de compter dessus)
+
+Que ce soit l'expéditeur (paiement à la création) ou le destinataire
+(paiement à la réception via le lien de suivi public), **tout paiement
+atterrit intégralement sur le compte FedaPay de Chrono** — il n'y a **aucune
+répartition ni versement automatique vers le livreur**. Le montant "pour
+vous" affiché au livreur (prix moins la commission de 100 F) est un chiffre
+calculé pour son information, pas un virement réel.
+
+Le seul mécanisme qui fait bouger de l'argent vers un livreur est l'avance
+sur gains (`livreur_advances`) : le livreur demande, l'admin approuve dans le
+tableau de bord, puis **l'admin envoie manuellement** le Mobile Money en
+dehors de l'app et marque la demande "versée". Un vrai virement automatique
+vers les livreurs nécessiterait de connecter une API de paiement **sortant**
+(et pas seulement entrant) — à valider avec FedaPay ou un opérateur Mobile
+Money avant de l'implémenter.
+
+Le **portefeuille Chrono** (solde prépayé client) réutilise exactement ce
+même circuit FedaPay/simulateur pour la recharge (`createWalletRecharge` dans
+`backend/src/routes/payments.js`) — une recharge suit donc les mêmes règles
+que ci-dessus, et payer une livraison avec le solde ne fait que débiter une
+ligne dans `wallet_transactions`, sans mouvement d'argent supplémentaire.
+
+Les **frais de retour** (destinataire qui refuse un colis) ne passent **pas**
+par FedaPay : ils sont affichés à titre indicatif au client et au livreur,
+et se règlent **en espèces, directement entre le livreur et le client**,
+en dehors de l'app.
+
 ## Prochaines étapes suggérées
 
 - **Abonnement livreur** : à réintroduire une fois le volume de commandes prouvé (voir plus haut).
@@ -141,14 +238,18 @@ colis-cotonou/
 │   ├── src/
 │   │   ├── db.js            # schéma SQLite + compte admin
 │   │   ├── auth.js          # JWT, middlewares
-│   │   ├── pricing.js       # zones, distance routière (OSRM), prix, commission, délai garanti
+│   │   ├── pricing.js       # zones, distance routière (OSRM), prix, commission, délai garanti, réduction groupe, frais de retour
 │   │   ├── socket.js        # Socket.io : position live du livreur, statuts en direct
+│   │   ├── vehicleDocuments.js  # types de documents véhicule requis, calcul du statut "vérifié"
 │   │   ├── routes/
 │   │   │   ├── auth.js
-│   │   │   ├── users.js     # profil + upload pièce d'identité livreur
-│   │   │   ├── deliveries.js
-│   │   │   ├── payments.js  # FedaPay (+ simulateur de repli)
-│   │   │   └── admin.js     # stats, revue des pièces d'identité
+│   │   │   ├── users.js     # profil + upload pièce d'identité/véhicule + Chrono Pro + avances livreur
+│   │   │   ├── deliveries.js  # + notes vocales, réclamations garantie colis, livraison groupée, retour destinataire
+│   │   │   ├── payments.js  # FedaPay (+ simulateur de repli), logique partagée avec le paiement public, portefeuille Chrono
+│   │   │   ├── public.js    # suivi sans app, paiement destinataire, vitrine boutique (sans authentification)
+│   │   │   ├── admin.js     # stats, revue documents, réclamations, avances livreur, courses impayées
+│   │   │   ├── alertes.js   # alertes SOS livreur (danger/panne), diffusées en direct à l'admin
+│   │   │   └── inondations.js  # alertes route inondée (signalement manuel client/livreur)
 │   │   └── server.js
 │   ├── uploads/documents/   # pièces d'identité envoyées (non versionné, voir .gitignore)
 │   └── .env
@@ -160,7 +261,8 @@ colis-cotonou/
 │       │   └── admin/
 │       ├── components/
 │       │   ├── ZoneBadge.jsx     # badges zone + garantie de délai
-│       │   └── TrackingMap.jsx   # carte + position live du livreur
+│       │   ├── TrackingMap.jsx   # carte + position live du livreur
+│       │   └── SOSButton.jsx     # bouton SOS livreur (danger/panne)
 │       ├── hooks/
 │       │   ├── useLivePosition.js  # côté client : reçoit la position en direct
 │       │   └── useSendPosition.js  # côté livreur : envoie sa position GPS

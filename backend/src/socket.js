@@ -39,6 +39,28 @@ export function initSocket(httpServer) {
       }
     });
 
+    // Suivi public ("suivi sans app") : pas de JWT, juste le token de partage
+    // de la livraison — voir routes/public.js.
+    socket.on('rejoindre_suivi_public', ({ deliveryId, shareToken }) => {
+      if (!shareToken) return;
+      const delivery = db.prepare('SELECT id FROM deliveries WHERE id = ? AND share_token = ?').get(deliveryId, shareToken);
+      if (!delivery) return;
+      socket.join(deliveryRoom(deliveryId));
+    });
+
+    // L'admin rejoint le canal global des alertes SOS pour recevoir l'alarme
+    // et la position exacte dès qu'un livreur déclenche une alerte, où qu'il
+    // soit (pas forcément en pleine course suivie).
+    socket.on('rejoindre_admin', ({ token }) => {
+      try {
+        const payload = jwt.verify(token, JWT_SECRET);
+        if (payload.role !== 'admin') return;
+        socket.join('admins');
+      } catch {
+        /* jeton invalide ou expiré : on ignore silencieusement */
+      }
+    });
+
     // Le livreur pousse sa position GPS pendant une course active
     socket.on('position_livreur', ({ deliveryId, token, lat, lng }) => {
       try {
@@ -70,6 +92,13 @@ export function broadcastPosition(deliveryId, payload) {
 // à tous les abonnés du canal, pour un suivi en direct sans avoir à rafraîchir.
 export function broadcastStatus(deliveryId, delivery) {
   if (io) io.to(deliveryRoom(deliveryId)).emit('livraison_mise_a_jour', delivery);
+}
+
+// Diffuse une nouvelle alerte SOS (ou une résolution) à tous les admins
+// connectés, en temps réel — c'est ce qui déclenche l'alarme sonore et
+// l'affichage de la position sur le tableau de bord admin.
+export function broadcastAlerte(alert) {
+  if (io) io.to('admins').emit('alerte_sos', alert);
 }
 
 export function getIo() {

@@ -5,7 +5,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import api from '../../lib/api';
 import { colors, radius } from '../../lib/theme';
 import TopBar from '../../components/TopBar';
-import { StatusBadge, PaymentBadge, DelaiBadge } from '../../components/Badge';
+import { StatusBadge, PaymentBadge, DelaiBadge, Badge } from '../../components/Badge';
 
 export default function MyDeliveriesScreen({ navigation }) {
   const [deliveries, setDeliveries] = useState([]);
@@ -71,6 +71,8 @@ export default function MyDeliveriesScreen({ navigation }) {
                   <StatusBadge status={item.status} />
                   <PaymentBadge status={item.payment_status} />
                   {!item.delai_garanti && <DelaiBadge delaiGaranti={false} />}
+                  {!!item.group_id && <Badge label="🔗 Groupée" bg="#f3e8ff" fg="#6b21a8" border="#e9d5ff" />}
+                  {item.return_status === 'demande' && <Badge label="↩️ Retour" bg="#fee2e2" fg="#991b1b" border="#fecaca" />}
                 </View>
               </View>
             </View>

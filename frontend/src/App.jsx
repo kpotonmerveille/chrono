@@ -15,6 +15,9 @@ import LivreurDeliveryDetail from './pages/livreur/LivreurDeliveryDetail';
 
 import AdminDashboard from './pages/admin/AdminDashboard';
 
+import SuiviPublic from './pages/public/SuiviPublic';
+import BoutiquePublic from './pages/public/BoutiquePublic';
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -24,6 +27,10 @@ export default function App() {
           <Route path="/connexion" element={<Login />} />
           <Route path="/admin-connexion" element={<AdminLogin />} />
           <Route path="/inscription" element={<Register />} />
+
+          {/* Suivi sans app / vitrine boutique : accès public, sans authentification */}
+          <Route path="/suivi/:token" element={<SuiviPublic />} />
+          <Route path="/boutique/:slug" element={<BoutiquePublic />} />
 
           <Route path="/client" element={<ProtectedRoute role="client"><ClientDashboard /></ProtectedRoute>} />
           <Route path="/client/livraisons/:id" element={<ProtectedRoute role="client"><DeliveryDetail /></ProtectedRoute>} />

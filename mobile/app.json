@@ -20,7 +20,8 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Chrono utilise votre position pendant une course active pour la partager en direct avec le client.",
         "NSCameraUsageDescription": "Chrono utilise l'appareil photo pour prendre une photo de votre pièce d'identité à envoyer pour vérification.",
-        "NSPhotoLibraryUsageDescription": "Chrono a besoin d'accéder à vos photos pour envoyer une image de votre pièce d'identité."
+        "NSPhotoLibraryUsageDescription": "Chrono a besoin d'accéder à vos photos pour envoyer une image de votre pièce d'identité.",
+        "NSMicrophoneUsageDescription": "Chrono utilise le micro pour enregistrer une courte note vocale (repère, instructions) jointe à votre livraison."
       }
     },
     "android": {
@@ -35,7 +36,8 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
         "CAMERA",
-        "READ_MEDIA_IMAGES"
+        "READ_MEDIA_IMAGES",
+        "RECORD_AUDIO"
       ],
       "config": {
         "googleMaps": {
@@ -58,6 +60,12 @@
         {
           "photosPermission": "Chrono a besoin d'accéder à vos photos pour envoyer une image de votre pièce d'identité.",
           "cameraPermission": "Chrono utilise l'appareil photo pour prendre une photo de votre pièce d'identité à envoyer pour vérification."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Chrono utilise le micro pour enregistrer une courte note vocale (repère, instructions) jointe à votre livraison."
         }
       ]
     ]

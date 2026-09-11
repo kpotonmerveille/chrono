@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import api, { apiErrorMessage } from '../../lib/api';
@@ -8,13 +8,135 @@ import { PLATFORM_COMMISSION } from '../../lib/labels';
 import { useAuth } from '../../context/AuthContext';
 import TopBar from '../../components/TopBar';
 import DocumentPanel from '../../components/DocumentPanel';
-import { StatusBadge, ZoneBadge, DelaiBadge } from '../../components/Badge';
+import PrimaryButton from '../../components/PrimaryButton';
+import { StatusBadge, ZoneBadge, DelaiBadge, Badge } from '../../components/Badge';
+import FloodAlertPanel from '../../components/FloodAlertPanel';
+import { haversineKm } from '../../lib/geo';
 
 const TABS = [
   { key: 'disponibles', label: 'Disponibles' },
   { key: 'mes-courses', label: 'Mes courses' },
   { key: 'historique', label: 'Historique' },
+  { key: 'avance', label: '💸 Avance' },
+  { key: 'inondations', label: '🌊 Routes' },
 ];
+
+// Doit rester synchronisé avec FLOOD_ALERT_RADIUS_KM dans
+// backend/src/pricing.js — utilisé uniquement pour signaler visuellement une
+// course proche d'une alerte déjà chargée, pas pour une décision serveur.
+const FLOOD_ALERT_RADIUS_KM = 1.5;
+
+// "Avance sur gains" : demander un retrait sur des gains déjà réalisés,
+// avant la fin de la journée — versement Mobile Money géré manuellement par
+// l'admin. Équivalent mobile de AvancePanel dans
+// frontend/src/pages/livreur/LivreurDashboard.jsx.
+const AVANCE_STATUS_LABEL = {
+  en_attente: { text: 'En attente', bg: colors.amber100, color: colors.amber800 },
+  approuvee: { text: 'Approuvée', bg: colors.blue100, color: colors.blue800 },
+  versee: { text: 'Versée', bg: colors.green100, color: colors.green800 },
+  refusee: { text: 'Refusée', bg: colors.red50, color: colors.red700 },
+};
+
+function AvancePanel({ gains, onRequested }) {
+  const [amount, setAmount] = useState('');
+  const [avances, setAvances] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const loadAvances = useCallback(async () => {
+    try {
+      const res = await api.get('/users/me/avances');
+      setAvances(res.data.avances);
+    } catch {
+      /* l'historique n'est pas critique */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAvances();
+  }, [loadAvances]);
+
+  async function handleSubmit() {
+    setError('');
+    setSuccess('');
+    const value = parseInt(amount, 10);
+    if (!Number.isInteger(value) || value <= 0) {
+      setError('Montant invalide');
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.post('/users/me/avance', { amount: value });
+      setAmount('');
+      setSuccess("Demande envoyée. Le versement Mobile Money sera confirmé par l'administration.");
+      await loadAvances();
+      await onRequested();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const disponible = gains?.disponible_pour_avance ?? 0;
+
+  return (
+    <View style={{ gap: 14 }}>
+      <View style={styles.card}>
+        <Text style={styles.subText}>
+          Vous pouvez demander une avance sur vos gains déjà réalisés, avant la fin de la journée.
+        </Text>
+        <View style={styles.avanceStatsRow}>
+          <View style={styles.avanceStatBox}>
+            <Text style={styles.statLabel}>Déjà demandé</Text>
+            <Text style={styles.statValue}>{gains?.deja_avance ?? 0} F</Text>
+          </View>
+          <View style={[styles.avanceStatBox, { backgroundColor: colors.emerald50 }]}>
+            <Text style={[styles.statLabel, { color: colors.emerald700 }]}>Disponible pour avance</Text>
+            <Text style={[styles.statValue, { color: colors.emerald700 }]}>{disponible} F</Text>
+          </View>
+        </View>
+        <TextInput
+          value={amount}
+          onChangeText={setAmount}
+          placeholder="Montant (FCFA)"
+          placeholderTextColor={colors.slate400}
+          keyboardType="number-pad"
+          style={styles.amountInput}
+        />
+        <PrimaryButton
+          title={loading ? 'Envoi...' : 'Demander une avance'}
+          onPress={handleSubmit}
+          loading={loading}
+          disabled={disponible <= 0}
+        />
+        {disponible <= 0 && <Text style={styles.subText}>Aucun montant disponible pour le moment.</Text>}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {success ? <Text style={{ color: colors.green700, fontSize: 13 }}>{success}</Text> : null}
+      </View>
+
+      <View style={{ gap: 10 }}>
+        <Text style={styles.sectionTitle}>Historique de vos demandes</Text>
+        {avances.length === 0 && <EmptyBox text="Aucune demande d'avance pour le moment." />}
+        {avances.map((a) => {
+          const badge = AVANCE_STATUS_LABEL[a.status] || AVANCE_STATUS_LABEL.en_attente;
+          return (
+            <View key={a.id} style={[styles.card, styles.acceptRow]}>
+              <View>
+                <Text style={styles.route}>{a.amount} FCFA</Text>
+                <Text style={styles.subText}>{new Date(a.requested_at).toLocaleString('fr-FR')}</Text>
+              </View>
+              <View style={[styles.badge, { backgroundColor: badge.bg }]}>
+                <Text style={[styles.badgeText, { color: badge.color }]}>{badge.text}</Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 
 export default function LivreurHomeScreen({ navigation }) {
   const { user, refreshUser } = useAuth();
@@ -22,6 +144,7 @@ export default function LivreurHomeScreen({ navigation }) {
   const [available, setAvailable] = useState([]);
   const [mine, setMine] = useState([]);
   const [gains, setGains] = useState(null);
+  const [floodAlerts, setFloodAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [toggling, setToggling] = useState(false);
@@ -31,14 +154,16 @@ export default function LivreurHomeScreen({ navigation }) {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     try {
-      const [avRes, mineRes, gainsRes] = await Promise.all([
+      const [avRes, mineRes, gainsRes, floodRes] = await Promise.all([
         api.get('/deliveries/disponibles').catch(() => ({ data: { deliveries: [] } })),
         api.get('/deliveries/assignees'),
         api.get('/users/me/gains'),
+        api.get('/inondations').catch(() => ({ data: { alertes: [] } })),
       ]);
       setAvailable(avRes.data.deliveries);
       setMine(mineRes.data.deliveries);
       setGains(gainsRes.data);
+      setFloodAlerts(floodRes.data.alertes);
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
@@ -46,6 +171,17 @@ export default function LivreurHomeScreen({ navigation }) {
       setRefreshing(false);
     }
   }, []);
+
+  // Signale une course dont le retrait ou la livraison tombe à proximité
+  // d'une alerte route inondée active — purement informatif côté livreur,
+  // calculé avec les alertes déjà chargées (pas d'appel réseau par course).
+  function floodNear(d) {
+    return floodAlerts.some((a) => {
+      const distPickup = haversineKm(d.pickup_lat, d.pickup_lng, a.lat, a.lng);
+      const distDropoff = haversineKm(d.dropoff_lat, d.dropoff_lng, a.lat, a.lng);
+      return (distPickup !== null && distPickup <= FLOOD_ALERT_RADIUS_KM) || (distDropoff !== null && distDropoff <= FLOOD_ALERT_RADIUS_KM);
+    });
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -106,7 +242,7 @@ export default function LivreurHomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {user.id_document_status !== 'approuve' && <DocumentPanel user={user} onUpdated={refreshUser} />}
+        {!user.verified && <DocumentPanel user={user} onUpdated={refreshUser} />}
 
         <View style={styles.statsRow}>
           <View style={styles.statBox}>
@@ -152,7 +288,12 @@ export default function LivreurHomeScreen({ navigation }) {
                 <View style={styles.badgeRow}>
                   <ZoneBadge zone={d.zone} />
                   <DelaiBadge delaiGaranti={!!d.delai_garanti} />
+                  {d.group_size > 1 && <Badge label={`🔗 Groupée (${d.group_size} colis)`} bg="#f3e8ff" fg="#6b21a8" border="#e9d5ff" />}
+                  {floodNear(d) && <Badge label="🌊 Route inondée signalée à proximité" bg="#e0f2fe" fg="#075985" border="#bae6fd" />}
                 </View>
+                {d.group_size > 1 && (
+                  <Text style={styles.subText}>Accepter cette course vous attribue les {d.group_size} colis du groupe.</Text>
+                )}
                 <View style={styles.acceptRow}>
                   <View>
                     <Text style={styles.share}>{d.price - PLATFORM_COMMISSION} FCFA</Text>
@@ -184,6 +325,8 @@ export default function LivreurHomeScreen({ navigation }) {
                     <View style={styles.badgeRow}>
                       <StatusBadge status={d.status} />
                       {!d.delai_garanti && <DelaiBadge delaiGaranti={false} />}
+                      {d.group_size > 1 && <Badge label="🔗 Groupée" bg="#f3e8ff" fg="#6b21a8" border="#e9d5ff" />}
+                      {d.return_status === 'demande' && <Badge label="↩️ Retour" bg="#fee2e2" fg="#991b1b" border="#fecaca" />}
                     </View>
                   </View>
                 </View>
@@ -211,6 +354,10 @@ export default function LivreurHomeScreen({ navigation }) {
             ))}
           </View>
         )}
+
+        {!loading && tab === 'avance' && <AvancePanel gains={gains} onRequested={loadAll} />}
+
+        {!loading && tab === 'inondations' && <FloodAlertPanel user={user} onAlertsChanged={setFloodAlerts} />}
       </ScrollView>
     </SafeAreaView>
   );
@@ -256,4 +403,10 @@ const styles = StyleSheet.create({
   shareHint: { fontSize: 11, color: colors.slate400 },
   acceptBtn: { backgroundColor: colors.orange500, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 9 },
   acceptText: { color: colors.white, fontSize: 13, fontWeight: '700' },
+  sectionTitle: { fontSize: 14, fontWeight: '700', color: colors.slate700 },
+  avanceStatsRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  avanceStatBox: { flex: 1, backgroundColor: colors.slate100, borderRadius: radius.sm, padding: 10, alignItems: 'center' },
+  amountInput: { borderWidth: 1, borderColor: colors.slate300, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, marginTop: 12, color: colors.slate900, backgroundColor: colors.white },
+  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.full },
+  badgeText: { fontSize: 12, fontWeight: '600' },
 });

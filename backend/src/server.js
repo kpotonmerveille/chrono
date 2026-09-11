@@ -14,6 +14,9 @@ import userRoutes from './routes/users.js';
 import deliveryRoutes from './routes/deliveries.js';
 import paymentRoutes from './routes/payments.js';
 import adminRoutes from './routes/admin.js';
+import publicRoutes from './routes/public.js';
+import alerteRoutes from './routes/alertes.js';
+import inondationRoutes from './routes/inondations.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -32,6 +35,9 @@ app.use('/api/users', userRoutes);
 app.use('/api/deliveries', deliveryRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/public', publicRoutes);
+app.use('/api/alertes', alerteRoutes);
+app.use('/api/inondations', inondationRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Route introuvable' }));
 

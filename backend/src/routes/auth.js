@@ -2,8 +2,20 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import db from '../db.js';
 import { signToken } from '../auth.js';
+import { getVehicleDocumentsSummary } from '../vehicleDocuments.js';
 
 const router = Router();
+
+// Même logique que GET /users/me : un livreur reçoit aussi l'état de ses
+// documents véhicule dans la réponse, pour que le tableau de bord livreur
+// puisse afficher le panneau de vérification dès la première page vue
+// (inscription ou connexion), sans attendre un rafraîchissement séparé.
+function withVehicleDocuments(user) {
+  if (user.role === 'livreur') {
+    user.vehicle_documents = getVehicleDocumentsSummary(db, user.id);
+  }
+  return user;
+}
 
 // Inscription client ou livreur
 router.post('/register', (req, res) => {
@@ -36,7 +48,7 @@ router.post('/register', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
   const token = signToken(user);
   delete user.password_hash;
-  res.status(201).json({ token, user });
+  res.status(201).json({ token, user: withVehicleDocuments(user) });
 });
 
 router.post('/login', (req, res) => {
@@ -50,7 +62,7 @@ router.post('/login', (req, res) => {
   }
   const token = signToken(user);
   delete user.password_hash;
-  res.json({ token, user });
+  res.json({ token, user: withVehicleDocuments(user) });
 });
 
 // Connexion admin par email

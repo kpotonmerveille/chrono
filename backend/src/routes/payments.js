@@ -27,7 +27,7 @@ const FEDAPAY_ENV = process.env.FEDAPAY_ENV || 'sandbox'; // 'sandbox' ou 'live'
 const FEDAPAY_WEBHOOK_SECRET = process.env.FEDAPAY_WEBHOOK_SECRET || '';
 // RENDER_EXTERNAL_URL est fournie automatiquement par Render en production
 // (l'URL publique du service) ; FRONTEND_URL prime si définie explicitement.
-const FRONTEND_URL = process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:5173';
+export const FRONTEND_URL = process.env.FRONTEND_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:5173';
 export const FEDAPAY_ENABLED = Boolean(FEDAPAY_SECRET_KEY);
 
 if (FEDAPAY_ENABLED) {
@@ -40,6 +40,50 @@ if (FEDAPAY_ENABLED) {
 
 const PAID_STATUSES = ['approved', 'transferred', 'approved_partially_refunded', 'transferred_partially_refunded'];
 const FAILED_STATUSES = ['declined', 'canceled'];
+
+/**
+ * Logique de paiement partagée entre la route authentifiée (le client paie
+ * depuis son tableau de bord) et la route publique (le destinataire paie
+ * depuis le lien de suivi partagé, sans compte — voir routes/public.js).
+ * `payer` = { name, phone, email? }, la personne qui paie réellement.
+ */
+export async function createPaymentForDelivery(delivery, { method, momoNumber, payer, callbackUrl }) {
+  if (!FEDAPAY_ENABLED) {
+    // Mode simulateur : succès immédiat (aucune clé FedaPay configurée)
+    const txResult = db.prepare(`
+      INSERT INTO transactions (delivery_id, amount, method, status, provider_ref)
+      VALUES (?, ?, ?, 'reussie', ?)
+    `).run(delivery.id, delivery.price, method, `SIM-${Date.now()}`);
+    db.prepare(`UPDATE deliveries SET payment_status = 'paye' WHERE id = ?`).run(delivery.id);
+    const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(txResult.lastInsertRowid);
+    const updatedDelivery = db.prepare('SELECT * FROM deliveries WHERE id = ?').get(delivery.id);
+    return { simulated: true, transaction, delivery: updatedDelivery };
+  }
+
+  const nameParts = (payer.name || 'Client Chrono').trim().split(/\s+/);
+  const fedaTransaction = await Transaction.create({
+    description: `Livraison Chrono #${delivery.id} — ${delivery.pickup_address} vers ${delivery.dropoff_address}`,
+    amount: delivery.price,
+    currency: { iso: 'XOF' },
+    callback_url: callbackUrl,
+    customer: {
+      firstname: nameParts[0],
+      lastname: nameParts.slice(1).join(' ') || nameParts[0],
+      email: payer.email || undefined,
+      phone_number: { number: momoNumber || payer.phone, country: 'bj' },
+    },
+  });
+
+  const tokenObject = await fedaTransaction.generateToken();
+
+  const txResult = db.prepare(`
+    INSERT INTO transactions (delivery_id, amount, method, status, provider_ref, checkout_url)
+    VALUES (?, ?, 'fedapay', 'en_attente', ?, ?)
+  `).run(delivery.id, delivery.price, String(fedaTransaction.id), tokenObject.url);
+
+  const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(txResult.lastInsertRowid);
+  return { simulated: false, transaction, checkout_url: tokenObject.url };
+}
 
 router.post('/deliveries/:id/payer', authRequired, requireRole('client'), async (req, res) => {
   const { method, momo_number } = req.body; // 'mtn_momo' | 'moov_money' | 'carte'
@@ -58,46 +102,90 @@ router.post('/deliveries/:id/payer', authRequired, requireRole('client'), async 
     return res.status(400).json({ error: 'Numéro Mobile Money requis' });
   }
 
-  if (!FEDAPAY_ENABLED) {
-    // Mode simulateur : succès immédiat (aucune clé FedaPay configurée)
-    const txResult = db.prepare(`
-      INSERT INTO transactions (delivery_id, amount, method, status, provider_ref)
-      VALUES (?, ?, ?, 'reussie', ?)
-    `).run(delivery.id, delivery.price, method, `SIM-${Date.now()}`);
-    db.prepare(`UPDATE deliveries SET payment_status = 'paye' WHERE id = ?`).run(delivery.id);
-    const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(txResult.lastInsertRowid);
-    const updatedDelivery = db.prepare('SELECT * FROM deliveries WHERE id = ?').get(delivery.id);
-    return res.json({ simulated: true, transaction, delivery: updatedDelivery });
-  }
-
   try {
     const client = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-    const nameParts = (client.name || 'Client Chrono').trim().split(/\s+/);
-
-    const fedaTransaction = await Transaction.create({
-      description: `Livraison Chrono #${delivery.id} — ${delivery.pickup_address} vers ${delivery.dropoff_address}`,
-      amount: delivery.price,
-      currency: { iso: 'XOF' },
-      callback_url: `${FRONTEND_URL}/client/livraisons/${delivery.id}`,
-      customer: {
-        firstname: nameParts[0],
-        lastname: nameParts.slice(1).join(' ') || nameParts[0],
-        email: client.email || undefined,
-        phone_number: { number: momo_number || client.phone, country: 'bj' },
-      },
+    const result = await createPaymentForDelivery(delivery, {
+      method, momoNumber: momo_number,
+      payer: { name: client.name, phone: client.phone, email: client.email },
+      callbackUrl: `${FRONTEND_URL}/client/livraisons/${delivery.id}`,
     });
-
-    const tokenObject = await fedaTransaction.generateToken();
-
-    const txResult = db.prepare(`
-      INSERT INTO transactions (delivery_id, amount, method, status, provider_ref, checkout_url)
-      VALUES (?, ?, 'fedapay', 'en_attente', ?, ?)
-    `).run(delivery.id, delivery.price, String(fedaTransaction.id), tokenObject.url);
-
-    const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(txResult.lastInsertRowid);
-    res.json({ simulated: false, transaction, checkout_url: tokenObject.url });
+    res.json(result);
   } catch (err) {
     console.error('[FedaPay] Échec de création de transaction :', err?.message || err);
+    res.status(502).json({ error: "Impossible de contacter FedaPay pour le moment. Réessayez dans un instant." });
+  }
+});
+
+/**
+ * PORTEFEUILLE CHRONO — même logique de paiement que pour une livraison
+ * (simulateur si FedaPay n'est pas configuré, sinon vraie transaction
+ * FedaPay), mais le crédit va sur le solde de l'utilisateur plutôt que sur
+ * une livraison précise. Le webhook (plus bas) distingue les deux via la
+ * table où se trouve le provider_ref reçu.
+ */
+const MIN_RECHARGE = 500; // FCFA
+
+async function createWalletRecharge(user, { amount, method, momoNumber, callbackUrl }) {
+  if (!FEDAPAY_ENABLED) {
+    const txResult = db.prepare(`
+      INSERT INTO wallet_transactions (user_id, type, amount, status, provider_ref)
+      VALUES (?, 'recharge', ?, 'reussie', ?)
+    `).run(user.id, amount, `SIM-${Date.now()}`);
+    db.prepare(`UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?`).run(amount, user.id);
+    const transaction = db.prepare('SELECT * FROM wallet_transactions WHERE id = ?').get(txResult.lastInsertRowid);
+    return { simulated: true, transaction };
+  }
+
+  const nameParts = (user.name || 'Client Chrono').trim().split(/\s+/);
+  const fedaTransaction = await Transaction.create({
+    description: `Recharge portefeuille Chrono — ${user.name}`,
+    amount,
+    currency: { iso: 'XOF' },
+    callback_url: callbackUrl,
+    customer: {
+      firstname: nameParts[0],
+      lastname: nameParts.slice(1).join(' ') || nameParts[0],
+      email: user.email || undefined,
+      phone_number: { number: momoNumber || user.phone, country: 'bj' },
+    },
+  });
+  const tokenObject = await fedaTransaction.generateToken();
+
+  const txResult = db.prepare(`
+    INSERT INTO wallet_transactions (user_id, type, amount, status, provider_ref, checkout_url)
+    VALUES (?, 'recharge', ?, 'en_attente', ?, ?)
+  `).run(user.id, amount, String(fedaTransaction.id), tokenObject.url);
+
+  const transaction = db.prepare('SELECT * FROM wallet_transactions WHERE id = ?').get(txResult.lastInsertRowid);
+  return { simulated: false, transaction, checkout_url: tokenObject.url };
+}
+
+router.get('/wallet', authRequired, requireRole('client'), (req, res) => {
+  const user = db.prepare('SELECT wallet_balance FROM users WHERE id = ?').get(req.user.id);
+  const transactions = db.prepare('SELECT * FROM wallet_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(req.user.id);
+  res.json({ balance: user.wallet_balance, transactions });
+});
+
+router.post('/wallet/recharger', authRequired, requireRole('client'), async (req, res) => {
+  const { amount, method, momo_number } = req.body;
+  if (!Number.isInteger(amount) || amount < MIN_RECHARGE) {
+    return res.status(400).json({ error: `Montant minimum de recharge : ${MIN_RECHARGE} FCFA` });
+  }
+  if (!['mtn_momo', 'moov_money', 'carte'].includes(method)) {
+    return res.status(400).json({ error: 'Méthode de paiement invalide' });
+  }
+  if (method !== 'carte' && !momo_number) {
+    return res.status(400).json({ error: 'Numéro Mobile Money requis' });
+  }
+  try {
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+    const result = await createWalletRecharge(user, {
+      amount, method, momoNumber: momo_number,
+      callbackUrl: `${FRONTEND_URL}/client`,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[FedaPay] Échec de recharge portefeuille :', err?.message || err);
     res.status(502).json({ error: "Impossible de contacter FedaPay pour le moment. Réessayez dans un instant." });
   }
 });
@@ -153,15 +241,30 @@ export function fedapayWebhookHandler(req, res) {
   const transaction = db.prepare(
     `SELECT * FROM transactions WHERE provider_ref = ? AND method = 'fedapay'`
   ).get(fedaTransactionId);
-  if (!transaction) return res.json({ ok: true });
+  if (transaction) {
+    if (PAID_STATUSES.includes(entity.status)) {
+      db.prepare(`UPDATE transactions SET status = 'reussie' WHERE id = ?`).run(transaction.id);
+      db.prepare(`UPDATE deliveries SET payment_status = 'paye' WHERE id = ?`).run(transaction.delivery_id);
+      const updated = db.prepare('SELECT * FROM deliveries WHERE id = ?').get(transaction.delivery_id);
+      broadcastStatus(transaction.delivery_id, updated);
+    } else if (FAILED_STATUSES.includes(entity.status)) {
+      db.prepare(`UPDATE transactions SET status = 'echouee' WHERE id = ?`).run(transaction.id);
+    }
+    return res.json({ ok: true });
+  }
 
-  if (PAID_STATUSES.includes(entity.status)) {
-    db.prepare(`UPDATE transactions SET status = 'reussie' WHERE id = ?`).run(transaction.id);
-    db.prepare(`UPDATE deliveries SET payment_status = 'paye' WHERE id = ?`).run(transaction.delivery_id);
-    const updated = db.prepare('SELECT * FROM deliveries WHERE id = ?').get(transaction.delivery_id);
-    broadcastStatus(transaction.delivery_id, updated);
-  } else if (FAILED_STATUSES.includes(entity.status)) {
-    db.prepare(`UPDATE transactions SET status = 'echouee' WHERE id = ?`).run(transaction.id);
+  // Pas une livraison : peut-être une recharge de portefeuille Chrono.
+  const walletTx = db.prepare(`SELECT * FROM wallet_transactions WHERE provider_ref = ?`).get(fedaTransactionId);
+  if (walletTx && walletTx.status === 'en_attente') {
+    if (PAID_STATUSES.includes(entity.status)) {
+      const creditWallet = db.transaction(() => {
+        db.prepare(`UPDATE wallet_transactions SET status = 'reussie' WHERE id = ?`).run(walletTx.id);
+        db.prepare(`UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?`).run(walletTx.amount, walletTx.user_id);
+      });
+      creditWallet();
+    } else if (FAILED_STATUSES.includes(entity.status)) {
+      db.prepare(`UPDATE wallet_transactions SET status = 'echouee' WHERE id = ?`).run(walletTx.id);
+    }
   }
 
   res.json({ ok: true });

@@ -48,6 +48,11 @@ export const colors = {
   indigo600: '#4f46e5',
   indigo700: '#4338ca',
   indigo900: '#312e81',
+
+  emerald50: '#ecfdf5',
+  emerald100: '#d1fae5',
+  emerald700: '#047857',
+  emerald900: '#064e3b',
 };
 
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 28 };

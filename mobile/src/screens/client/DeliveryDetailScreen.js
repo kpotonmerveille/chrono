@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Share, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as WebBrowser from 'expo-web-browser';
-import api, { apiErrorMessage } from '../../lib/api';
+import * as FileSystem from 'expo-file-system';
+import { AudioModule, RecordingPresets, useAudioPlayer, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import api, { API_URL, TOKEN_KEY, apiErrorMessage } from '../../lib/api';
 import { colors, radius } from '../../lib/theme';
 import { STEPS } from '../../lib/labels';
 import TopBar from '../../components/TopBar';
-import { StatusBadge, PaymentBadge, ZoneBadge, DelaiBadge } from '../../components/Badge';
+import { StatusBadge, PaymentBadge, ZoneBadge, DelaiBadge, Badge } from '../../components/Badge';
 import TrackingMap from '../../components/TrackingMap';
 import PrimaryButton from '../../components/PrimaryButton';
 import useLivePosition from '../../hooks/useLivePosition';
@@ -32,6 +35,36 @@ function StepTimeline({ status }) {
       ))}
     </View>
   );
+}
+
+// Retour destinataire : le livreur a signalé un refus de réception —
+// équivalent mobile du panneau rouge/gris de
+// frontend/src/pages/client/DeliveryDetail.jsx. Les frais de retour se
+// règlent en espèces auprès du livreur (non intégrés à FedaPay).
+function ReturnStatusPanel({ delivery }) {
+  if (delivery.return_status === 'demande') {
+    return (
+      <View style={[styles.notice, { backgroundColor: colors.red50 }]}>
+        <Text style={{ color: colors.red700, fontSize: 13, fontWeight: '700' }}>↩️ Retour en cours</Text>
+        <Text style={{ color: colors.red700, fontSize: 12.5, marginTop: 4 }}>
+          Le destinataire a refusé le colis. Motif : {delivery.return_reason || '—'}
+        </Text>
+        <Text style={{ color: colors.red700, fontSize: 12.5, marginTop: 4 }}>
+          Frais de retour : {delivery.return_fee} FCFA, à régler en espèces au livreur.
+        </Text>
+      </View>
+    );
+  }
+  if (delivery.return_status === 'retournee') {
+    return (
+      <View style={[styles.notice, { backgroundColor: colors.slate100 }]}>
+        <Text style={{ color: colors.slate600, fontSize: 13 }}>
+          ↩️ Colis retourné à l'expéditeur — le destinataire avait refusé la réception.
+        </Text>
+      </View>
+    );
+  }
+  return null;
 }
 
 const PAYMENT_METHODS = [
@@ -108,6 +141,201 @@ function PayPanel({ delivery, onPaid, onNeedsPolling }) {
       <Text style={styles.payHint}>
         Paiement sécurisé via FedaPay (Mobile Money / carte). La page de paiement s'ouvre dans votre navigateur.
       </Text>
+    </View>
+  );
+}
+
+// "Suivi sans app" : ouvre le sélecteur de partage natif (WhatsApp, SMS,
+// etc.) avec le lien public de suivi — équivalent mobile de
+// ShareTrackingPanel dans frontend/src/pages/client/DeliveryDetail.jsx.
+function ShareTrackingPanel({ delivery }) {
+  if (!delivery.share_token) return null;
+  const url = `${API_URL.replace(/\/api\/?$/, '')}/suivi/${delivery.share_token}`;
+
+  async function share() {
+    try {
+      await Share.share({ message: `Suivez votre colis Chrono en direct, sans app : ${url}` });
+    } catch {
+      /* l'utilisateur a annulé le partage, rien à faire */
+    }
+  }
+
+  return (
+    <View style={styles.sharePanel}>
+      <Text style={styles.shareTitle}>📤 Partager le suivi (sans app, sans compte)</Text>
+      <Text style={styles.shareHintText}>Envoyez ce lien au destinataire ou à un proche pour qu'il suive la course en direct.</Text>
+      <TouchableOpacity onPress={share} style={styles.shareBtn} activeOpacity={0.85}>
+        <Text style={styles.shareBtnText}>🔗 Partager le lien</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// Enregistrement d'une note vocale (repère, instructions) via le micro du
+// téléphone (expo-audio) — équivalent mobile de VoiceNoteRecorder dans
+// frontend/src/pages/client/DeliveryDetail.jsx. La note existante (si
+// présente) est téléchargée dans le cache local (authentification requise)
+// avant lecture, car expo-audio joue depuis un fichier, pas depuis une
+// requête HTTP protégée.
+function VoiceNoteRecorder({ deliveryId, point, label, existingPath, onUploaded }) {
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder);
+  const [localUri, setLocalUri] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+  const player = useAudioPlayer(localUri || undefined);
+
+  useEffect(() => {
+    if (!existingPath) { setLocalUri(null); return undefined; }
+    let cancelled = false;
+    async function downloadNote() {
+      setDownloading(true);
+      try {
+        const token = await AsyncStorage.getItem(TOKEN_KEY);
+        const dest = `${FileSystem.cacheDirectory}note-${deliveryId}-${point}.m4a`;
+        const result = await FileSystem.downloadAsync(`${API_URL}/deliveries/${deliveryId}/note-vocale/${point}`, dest, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!cancelled) setLocalUri(result.uri);
+      } catch {
+        /* la note pourra être réécoutée après un rafraîchissement */
+      } finally {
+        if (!cancelled) setDownloading(false);
+      }
+    }
+    downloadNote();
+    return () => { cancelled = true; };
+  }, [deliveryId, point, existingPath]);
+
+  async function startRecording() {
+    setError('');
+    try {
+      const perm = await AudioModule.requestRecordingPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permission requise', "L'accès au micro est nécessaire pour enregistrer une note vocale.");
+        return;
+      }
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch {
+      setError("Impossible d'accéder au micro.");
+    }
+  }
+
+  async function stopRecording() {
+    try {
+      await recorder.stop();
+      if (recorder.uri) await upload(recorder.uri);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
+  }
+
+  async function upload(uri) {
+    setUploading(true);
+    setError('');
+    try {
+      const formData = new FormData();
+      formData.append('note', { uri, name: `note-${point}.m4a`, type: 'audio/m4a' });
+      await api.post(`/deliveries/${deliveryId}/note-vocale/${point}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setLocalUri(uri);
+      await onUploaded();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <View style={styles.voiceBox}>
+      <Text style={styles.voiceLabel}>🎙️ {label}</Text>
+      {downloading && <ActivityIndicator color={colors.slate400} />}
+      {localUri && !downloading && (
+        <TouchableOpacity onPress={() => player.play()} style={styles.playBtn} activeOpacity={0.85}>
+          <Text style={styles.playBtnText}>▶️ Écouter</Text>
+        </TouchableOpacity>
+      )}
+      <View style={styles.voiceActions}>
+        {!recorderState.isRecording ? (
+          <TouchableOpacity onPress={startRecording} disabled={uploading} style={[styles.recordBtn, uploading && styles.disabled]} activeOpacity={0.85}>
+            <Text style={styles.recordBtnText}>{localUri ? '🔴 Réenregistrer' : '🔴 Enregistrer une note vocale'}</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity onPress={stopRecording} style={styles.stopBtn} activeOpacity={0.85}>
+            <Text style={styles.stopBtnText}>⏹️ Arrêter l'enregistrement</Text>
+          </TouchableOpacity>
+        )}
+        {uploading && <ActivityIndicator color={colors.slate600} />}
+      </View>
+      {error ? <Text style={styles.voiceError}>{error}</Text> : null}
+    </View>
+  );
+}
+
+// Garantie colis : signaler un problème (cassé, perdu) une fois la livraison
+// terminée, uniquement si elle était assurée — équivalent mobile de
+// ClaimPanel dans frontend/src/pages/client/DeliveryDetail.jsx.
+function ClaimPanel({ delivery, onDone }) {
+  const [description, setDescription] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  if (!delivery.insured) return null;
+
+  if (delivery.claim_status === 'en_cours') {
+    return (
+      <View style={[styles.notice, { backgroundColor: colors.amber50 }]}>
+        <Text style={{ color: colors.amber800, fontSize: 13 }}>🛡️ Réclamation en cours d'examen par l'équipe Chrono.</Text>
+      </View>
+    );
+  }
+  if (delivery.claim_status === 'rembourse') {
+    return (
+      <View style={[styles.notice, { backgroundColor: colors.green50 }]}>
+        <Text style={{ color: colors.green700, fontSize: 13 }}>
+          🛡️ Réclamation acceptée : remboursement en cours.{delivery.claim_note ? ` (${delivery.claim_note})` : ''}
+        </Text>
+      </View>
+    );
+  }
+  if (delivery.claim_status === 'refuse') {
+    return (
+      <View style={[styles.notice, { backgroundColor: colors.red50 }]}>
+        <Text style={{ color: colors.red700, fontSize: 13 }}>
+          🛡️ Réclamation refusée.{delivery.claim_note ? ` Motif : ${delivery.claim_note}` : ''}
+        </Text>
+      </View>
+    );
+  }
+
+  async function handleSubmit() {
+    setError('');
+    setLoading(true);
+    try {
+      const res = await api.post(`/deliveries/${delivery.id}/reclamation`, { description });
+      onDone(res.data.delivery);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <View style={styles.claimPanel}>
+      <Text style={styles.payTitle}>🛡️ Un souci avec ce colis assuré (cassé, perdu...) ?</Text>
+      <TextInput
+        value={description}
+        onChangeText={setDescription}
+        placeholder="Décrivez le problème rencontré"
+        placeholderTextColor={colors.slate400}
+        multiline
+        style={styles.commentInput}
+      />
+      {error ? <Text style={{ color: colors.red600, fontSize: 13 }}>{error}</Text> : null}
+      <PrimaryButton title={loading ? 'Envoi...' : 'Signaler un problème'} onPress={handleSubmit} loading={loading} variant="dark" disabled={!description.trim()} />
     </View>
   );
 }
@@ -260,9 +488,12 @@ export default function DeliveryDetailScreen({ route }) {
           <PaymentBadge status={delivery.payment_status} />
           <ZoneBadge zone={delivery.zone} />
           <DelaiBadge delaiGaranti={!!delivery.delai_garanti} />
+          {!!delivery.group_id && <Badge label="🔗 Groupée" bg="#f3e8ff" fg="#6b21a8" border="#e9d5ff" />}
         </View>
 
         <StepTimeline status={delivery.status} />
+
+        <ReturnStatusPanel delivery={delivery} />
 
         <TrackingMap delivery={delivery} livreurPosition={livreurPosition} />
 
@@ -283,6 +514,11 @@ export default function DeliveryDetailScreen({ route }) {
                 Zone longue distance : la livraison en 30 min n'est pas garantie sur ce trajet.
               </Text>
             )}
+            {!!delivery.group_discount && (
+              <Text style={{ fontSize: 11, color: '#6b21a8', marginTop: 4 }}>
+                🔗 Livraison groupée : {delivery.group_discount} FCFA économisés.
+              </Text>
+            )}
           </View>
           {delivery.livreur_name && (
             <View style={styles.infoBox}>
@@ -295,11 +531,21 @@ export default function DeliveryDetailScreen({ route }) {
           )}
         </View>
 
-        {delivery.payment_status !== 'paye' && delivery.status === 'en_attente' && (
+        {delivery.status !== 'annulee' && <ShareTrackingPanel delivery={delivery} />}
+
+        {delivery.payer_type === 'expediteur' && delivery.payment_status !== 'paye' && delivery.status === 'en_attente' && (
           <PayPanel delivery={delivery} onPaid={setDelivery} onNeedsPolling={pollAfterPayment} />
         )}
 
-        {delivery.payment_status === 'paye' && !['livree', 'annulee'].includes(delivery.status) && (
+        {delivery.payer_type === 'destinataire' && delivery.payment_status !== 'paye' && !['livree', 'annulee'].includes(delivery.status) && (
+          <View style={[styles.notice, { backgroundColor: colors.slate100 }]}>
+            <Text style={{ color: colors.slate600, fontSize: 13 }}>
+              💰 Paiement à la réception : le destinataire règle via le lien de suivi partagé ci-dessus.
+            </Text>
+          </View>
+        )}
+
+        {delivery.payment_status === 'paye' && delivery.return_status === 'aucun' && !['livree', 'annulee'].includes(delivery.status) && (
           <View style={styles.codeBox}>
             <Text style={styles.codeTitle}>Code de confirmation à remettre au livreur</Text>
             <Text style={styles.codeValue}>{delivery.confirmation_code}</Text>
@@ -309,12 +555,20 @@ export default function DeliveryDetailScreen({ route }) {
           </View>
         )}
 
+        {!['livree', 'annulee'].includes(delivery.status) && (
+          <View style={{ gap: 10 }}>
+            <VoiceNoteRecorder deliveryId={delivery.id} point="retrait" label="Note vocale — retrait" existingPath={delivery.pickup_voice_note_path} onUploaded={load} />
+            <VoiceNoteRecorder deliveryId={delivery.id} point="livraison" label="Note vocale — livraison" existingPath={delivery.dropoff_voice_note_path} onUploaded={load} />
+          </View>
+        )}
+
         {['en_attente', 'acceptee'].includes(delivery.status) && (
           <TouchableOpacity onPress={handleCancel} disabled={cancelling} style={styles.cancelBtn}>
             <Text style={styles.cancelText}>{cancelling ? 'Annulation...' : 'Annuler la livraison'}</Text>
           </TouchableOpacity>
         )}
 
+        {delivery.status === 'livree' && <ClaimPanel delivery={delivery} onDone={setDelivery} />}
         {delivery.status === 'livree' && <ReviewPanel delivery={delivery} onDone={load} />}
       </ScrollView>
     </SafeAreaView>
@@ -361,4 +615,21 @@ const styles = StyleSheet.create({
   cancelText: { color: colors.red600, fontSize: 13, fontWeight: '600' },
   reviewPanel: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.slate100, borderRadius: radius.lg, padding: 14, gap: 10 },
   commentInput: { borderWidth: 1, borderColor: colors.slate300, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14, minHeight: 60, textAlignVertical: 'top', color: colors.slate900 },
+  sharePanel: { backgroundColor: colors.emerald50, borderWidth: 1, borderColor: colors.emerald100, borderRadius: radius.lg, padding: 14, gap: 8 },
+  shareTitle: { fontSize: 13, fontWeight: '700', color: colors.emerald900 },
+  shareHintText: { fontSize: 11, color: colors.emerald700 },
+  shareBtn: { alignSelf: 'flex-start', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.emerald100, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 8 },
+  shareBtnText: { fontSize: 12, fontWeight: '700', color: colors.emerald700 },
+  voiceBox: { backgroundColor: colors.slate100, borderRadius: radius.sm, padding: 12, gap: 8 },
+  voiceLabel: { fontSize: 13, color: colors.slate600 },
+  voiceActions: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  recordBtn: { backgroundColor: colors.slate800, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 8 },
+  recordBtnText: { color: colors.white, fontSize: 12, fontWeight: '700' },
+  disabled: { opacity: 0.5 },
+  stopBtn: { backgroundColor: colors.red600, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 8 },
+  stopBtnText: { color: colors.white, fontSize: 12, fontWeight: '700' },
+  playBtn: { alignSelf: 'flex-start', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.slate200, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 7 },
+  playBtnText: { fontSize: 12, fontWeight: '700', color: colors.slate700 },
+  voiceError: { fontSize: 11, color: colors.red600 },
+  claimPanel: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.slate200, borderRadius: radius.lg, padding: 14, gap: 10 },
 });

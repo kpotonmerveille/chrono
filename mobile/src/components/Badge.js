@@ -9,6 +9,12 @@ function BaseBadge({ label, bg, fg, border }) {
   );
 }
 
+// Badge générique (label/couleurs libres) — pour les cas qui n'ont pas leur
+// propre variante dédiée (ex: "Groupée", "Retour en cours").
+export function Badge(props) {
+  return <BaseBadge {...props} />;
+}
+
 export function StatusBadge({ status }) {
   const cfg = STATUS_CONFIG[status] || { label: status, bg: '#f1f5f9', fg: '#475569', border: '#e2e8f0' };
   return <BaseBadge {...cfg} />;

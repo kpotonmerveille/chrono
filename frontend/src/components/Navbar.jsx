@@ -1,5 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import SOSButton from './SOSButton';
 
 const ROLE_HOME = { client: '/client', livreur: '/livreur', admin: '/admin' };
 const ROLE_LABEL = { client: 'Client', livreur: 'Livreur', admin: 'Administrateur' };
@@ -25,6 +26,7 @@ export default function Navbar() {
             <span className="text-sm text-slate-600 hidden sm:inline">
               {user.name} <span className="text-slate-400">· {ROLE_LABEL[user.role]}</span>
             </span>
+            {user.role === 'livreur' && <SOSButton />}
             <button
               onClick={handleLogout}
               className="text-sm font-medium text-slate-600 hover:text-orange-600 border border-slate-200 rounded-lg px-3 py-1.5 transition"

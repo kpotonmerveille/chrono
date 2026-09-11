@@ -21,6 +21,11 @@ export function haversineKm(lat1, lng1, lat2, lng2) {
 // soit la zone. Le reste va intégralement au livreur.
 export const PLATFORM_COMMISSION = 100;
 
+// Garantie colis optionnelle : petit supplément forfaitaire, quelle que soit
+// la zone, payé par l'expéditeur à la création. En cas de colis cassé ou
+// perdu, le client peut ouvrir une réclamation (voir routes/deliveries.js).
+export const INSURANCE_FEE = 150;
+
 // Grille de tarifs par zone (validée avec Merveille le 08/09/2026).
 // La garantie "livraison en 30 minutes" ne s'applique qu'aux zones courte
 // et moyenne : au-delà de 5 km, le délai n'est plus promis au client.
@@ -123,3 +128,41 @@ export async function getRoadDistanceKm(lat1, lng1, lat2, lng2) {
 export function generateConfirmationCode() {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
+
+// --- Livraison groupée ("course partagée") ---
+//
+// Deux livraisons dans la même zone, avec un point de retrait proche, pas
+// encore prises en charge : rejoindre un groupe compagnon fait économiser
+// (le livreur ne fait qu'un seul trajet pour les deux). Seule la livraison
+// qui REJOINT profite de la réduction — le prix d'une livraison, une fois
+// fixé à sa création, n'est jamais recalculé rétroactivement.
+export const GROUP_DISCOUNT_RATIO = 0.3; // -30% pour la livraison qui rejoint
+export const GROUP_MAX_MEMBERS = 3;
+export const GROUP_MATCH_RADIUS_KM = 1.2;
+export const GROUP_MATCH_WINDOW_MINUTES = 20;
+
+export function computeGroupDiscount(price) {
+  return Math.round((price * GROUP_DISCOUNT_RATIO) / 10) * 10; // arrondi à la dizaine la plus proche
+}
+
+// --- Retour automatique (destinataire refuse) ---
+//
+// Tarif réduit pour le trajet retour vers l'expéditeur, à régler en espèces
+// au livreur (pas encore intégré à FedaPay).
+export const RETURN_FEE_RATIO = 0.5;
+
+export function computeReturnFee(price) {
+  return Math.round((price * RETURN_FEE_RATIO) / 10) * 10;
+}
+
+// --- Alerte route inondée (saison des pluies) ---
+//
+// Signalement manuel par un client ou un livreur : aucune donnée fiable sur
+// l'état réel des routes de Cotonou en saison des pluies n'est disponible
+// automatiquement, donc l'alerte repose entièrement sur ce que les
+// utilisateurs signalent eux-mêmes. Une alerte reste "active" un temps
+// limité (l'eau se retire en quelques heures) et peut être levée plus tôt
+// par son auteur ou par l'admin. Rayon large exprès : un axe inondé gêne
+// tout le monde à proximité, pas seulement le point exact signalé.
+export const FLOOD_ALERT_RADIUS_KM = 1.5;
+export const FLOOD_ALERT_TTL_HOURS = 6;

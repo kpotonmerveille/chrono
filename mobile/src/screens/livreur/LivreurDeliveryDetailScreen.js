@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import api, { apiErrorMessage } from '../../lib/api';
+import * as FileSystem from 'expo-file-system';
+import { useAudioPlayer } from 'expo-audio';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import api, { API_URL, TOKEN_KEY, apiErrorMessage } from '../../lib/api';
 import { colors, radius } from '../../lib/theme';
 import { PLATFORM_COMMISSION } from '../../lib/labels';
 import TopBar from '../../components/TopBar';
-import { StatusBadge, ZoneBadge, DelaiBadge } from '../../components/Badge';
+import { StatusBadge, ZoneBadge, DelaiBadge, Badge } from '../../components/Badge';
 import TrackingMap from '../../components/TrackingMap';
 import PrimaryButton from '../../components/PrimaryButton';
 import useLivePosition from '../../hooks/useLivePosition';
@@ -15,6 +18,141 @@ const NEXT_STATUS = {
   acceptee: { key: 'recuperee', label: 'Marquer le colis comme récupéré' },
   recuperee: { key: 'en_route', label: 'Marquer en route vers le destinataire' },
 };
+
+// Lecture d'une note vocale laissée par le client (repère, instructions) —
+// téléchargée dans le cache local (authentification requise) avant lecture,
+// équivalent mobile de VoiceNotePlayer dans
+// frontend/src/pages/livreur/LivreurDeliveryDetail.jsx.
+function VoiceNotePlayer({ deliveryId, point, label, existingPath }) {
+  const [localUri, setLocalUri] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+  const player = useAudioPlayer(localUri || undefined);
+
+  useEffect(() => {
+    if (!existingPath) { setLocalUri(null); return undefined; }
+    let cancelled = false;
+    async function downloadNote() {
+      setDownloading(true);
+      try {
+        const token = await AsyncStorage.getItem(TOKEN_KEY);
+        const dest = `${FileSystem.cacheDirectory}note-${deliveryId}-${point}.m4a`;
+        const result = await FileSystem.downloadAsync(`${API_URL}/deliveries/${deliveryId}/note-vocale/${point}`, dest, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!cancelled) setLocalUri(result.uri);
+      } catch {
+        /* silencieux : le livreur peut relancer en rechargeant l'écran */
+      } finally {
+        if (!cancelled) setDownloading(false);
+      }
+    }
+    downloadNote();
+    return () => { cancelled = true; };
+  }, [deliveryId, point, existingPath]);
+
+  if (!existingPath) return null;
+
+  return (
+    <View style={styles.voiceBox}>
+      <Text style={styles.voiceLabel}>🎙️ {label}</Text>
+      {downloading ? (
+        <ActivityIndicator color={colors.indigo600} />
+      ) : (
+        <TouchableOpacity onPress={() => player.play()} style={styles.playBtn} activeOpacity={0.85}>
+          <Text style={styles.playBtnText}>▶️ Écouter</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
+// Retour destinataire : signaler que le destinataire refuse le colis, puis
+// confirmer que le colis a bien été rapporté — équivalent mobile de
+// ReturnPanel dans frontend/src/pages/livreur/LivreurDeliveryDetail.jsx. Les
+// frais de retour se règlent en espèces (non intégrés à FedaPay).
+function ReturnPanel({ delivery, onUpdated }) {
+  const [showForm, setShowForm] = useState(false);
+  const [reason, setReason] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handleSignal() {
+    if (!reason.trim()) {
+      setError('Le motif du refus est requis.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      const res = await api.post(`/deliveries/${delivery.id}/retour`, { reason: reason.trim() });
+      onUpdated(res.data.delivery);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleFinish() {
+    setError('');
+    setLoading(true);
+    try {
+      const res = await api.post(`/deliveries/${delivery.id}/retour/termine`);
+      onUpdated(res.data.delivery);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (delivery.return_status === 'demande') {
+    return (
+      <View style={styles.returnPanel}>
+        <Text style={styles.returnTitle}>↩️ Retour en cours</Text>
+        <Text style={styles.returnText}>Motif : {delivery.return_reason || '—'}</Text>
+        <Text style={styles.returnText}>Frais de retour à percevoir en espèces : {delivery.return_fee} FCFA</Text>
+        {error ? <Text style={{ color: colors.red600, fontSize: 13 }}>{error}</Text> : null}
+        <PrimaryButton
+          title={loading ? 'Mise à jour...' : 'Retour terminé (colis rapporté)'}
+          onPress={handleFinish}
+          loading={loading}
+          variant="dark"
+        />
+      </View>
+    );
+  }
+
+  if (!showForm) {
+    return (
+      <TouchableOpacity onPress={() => setShowForm(true)} style={styles.returnLinkBtn} activeOpacity={0.7}>
+        <Text style={styles.returnLinkText}>↩️ Le destinataire refuse le colis</Text>
+      </TouchableOpacity>
+    );
+  }
+
+  return (
+    <View style={styles.returnPanel}>
+      <Text style={styles.returnTitle}>Motif du refus</Text>
+      <TextInput
+        value={reason}
+        onChangeText={setReason}
+        placeholder="Ex : destinataire injoignable, colis refusé..."
+        placeholderTextColor={colors.slate400}
+        multiline
+        style={styles.commentInput}
+      />
+      {error ? <Text style={{ color: colors.red600, fontSize: 13 }}>{error}</Text> : null}
+      <PrimaryButton
+        title={loading ? 'Envoi...' : 'Confirmer le retour'}
+        onPress={handleSignal}
+        loading={loading}
+        variant="dark"
+        disabled={!reason.trim()}
+      />
+    </View>
+  );
+}
 
 export default function LivreurDeliveryDetailScreen({ route, navigation }) {
   const { id } = route.params;
@@ -110,6 +248,7 @@ export default function LivreurDeliveryDetailScreen({ route, navigation }) {
           <StatusBadge status={delivery.status} />
           <ZoneBadge zone={delivery.zone} />
           <DelaiBadge delaiGaranti={!!delivery.delai_garanti} />
+          {delivery.group_size > 1 && <Badge label={`🔗 Groupée (${delivery.group_size} colis)`} bg="#f3e8ff" fg="#6b21a8" border="#e9d5ff" />}
         </View>
 
         <TrackingMap delivery={delivery} />
@@ -121,6 +260,13 @@ export default function LivreurDeliveryDetailScreen({ route, navigation }) {
             ⚠️ Localisation refusée : le client ne peut pas suivre votre position. Autorisez la localisation dans les
             réglages de votre téléphone pour activer le suivi en direct.
           </Text>
+        )}
+
+        {(delivery.pickup_voice_note_path || delivery.dropoff_voice_note_path) && (
+          <View style={{ gap: 10 }}>
+            <VoiceNotePlayer deliveryId={delivery.id} point="retrait" label="Repère — retrait" existingPath={delivery.pickup_voice_note_path} />
+            <VoiceNotePlayer deliveryId={delivery.id} point="livraison" label="Repère — livraison" existingPath={delivery.dropoff_voice_note_path} />
+          </View>
         )}
 
         <View style={styles.infoGrid}>
@@ -149,11 +295,11 @@ export default function LivreurDeliveryDetailScreen({ route, navigation }) {
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        {next && (
+        {next && delivery.return_status === 'aucun' && (
           <PrimaryButton title={updating ? 'Mise à jour...' : next.label} onPress={advanceStatus} loading={updating} />
         )}
 
-        {delivery.status === 'en_route' && (
+        {delivery.status === 'en_route' && delivery.return_status === 'aucun' && (
           <View style={styles.codePanel}>
             <Text style={styles.codeTitle}>Saisissez le code remis par le destinataire pour confirmer la livraison</Text>
             <TextInput
@@ -175,9 +321,19 @@ export default function LivreurDeliveryDetailScreen({ route, navigation }) {
           </View>
         )}
 
+        {['recuperee', 'en_route'].includes(delivery.status) && (
+          <ReturnPanel delivery={delivery} onUpdated={setDelivery} />
+        )}
+
         {delivery.status === 'livree' && (
           <View style={styles.doneBox}>
             <Text style={styles.doneText}>✅ Livraison terminée avec succès !</Text>
+          </View>
+        )}
+
+        {delivery.status === 'annulee' && delivery.return_status === 'retournee' && (
+          <View style={styles.returnDoneBox}>
+            <Text style={styles.returnDoneText}>↩️ Colis retourné à l'expéditeur.</Text>
           </View>
         )}
       </ScrollView>
@@ -216,4 +372,16 @@ const styles = StyleSheet.create({
   },
   doneBox: { backgroundColor: colors.green50, borderRadius: radius.sm, padding: 12, alignItems: 'center' },
   doneText: { color: colors.green700, fontWeight: '700', fontSize: 14 },
+  returnDoneBox: { backgroundColor: colors.slate100, borderRadius: radius.sm, padding: 12, alignItems: 'center' },
+  returnDoneText: { color: colors.slate600, fontWeight: '600', fontSize: 13 },
+  returnLinkBtn: { alignSelf: 'flex-start', paddingVertical: 6 },
+  returnLinkText: { color: colors.red600, fontSize: 13, fontWeight: '600' },
+  returnPanel: { backgroundColor: colors.red50, borderWidth: 1, borderColor: '#fecaca', borderRadius: radius.lg, padding: 14, gap: 10 },
+  returnTitle: { fontSize: 13, fontWeight: '700', color: colors.red700 },
+  returnText: { fontSize: 12.5, color: colors.red700 },
+  commentInput: { borderWidth: 1, borderColor: colors.slate300, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14, minHeight: 60, textAlignVertical: 'top', color: colors.slate900, backgroundColor: colors.white },
+  voiceBox: { backgroundColor: colors.indigo50, borderRadius: radius.sm, padding: 12, gap: 8 },
+  voiceLabel: { fontSize: 13, color: colors.indigo900 },
+  playBtn: { alignSelf: 'flex-start', backgroundColor: colors.white, borderWidth: 1, borderColor: colors.indigo100, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 7 },
+  playBtnText: { fontSize: 12, fontWeight: '700', color: colors.indigo700 },
 });
