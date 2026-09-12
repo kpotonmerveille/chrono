@@ -241,16 +241,26 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
 
 CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user ON wallet_transactions(user_id);
 
--- Alerte route inondée : signalement manuel (client ou livreur) d'un point
--- où la route est inondée/impraticable, en saison des pluies. Pas de
--- détection automatique (aucune donnée fiable disponible) — juste un
--- signalement partagé, actif un temps limité (voir FLOOD_ALERT_TTL_HOURS)
--- ou jusqu'à ce que son auteur ou l'admin le lève.
+-- Signalement d'incident route/voirie : manuel (client ou livreur), sur un
+-- point précis. Trois types (voir ALERT_TYPES dans pricing.js) : route
+-- inondée (saison des pluies), voie barrée (travaux publics), panne
+-- électrique/poteau tombé (danger). Pas de détection automatique (aucune
+-- donnée fiable disponible) — juste un signalement partagé, actif un temps
+-- limité propre à chaque type, ou jusqu'à ce que son auteur ou l'admin le
+-- lève. "flood_alerts" est l'ancien nom de la table, conservé pour ne pas
+-- casser les données existantes — elle couvre maintenant plus que les
+-- inondations, voir la colonne "type".
 CREATE TABLE IF NOT EXISTS flood_alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   reporter_id INTEGER NOT NULL REFERENCES users(id),
+  type TEXT NOT NULL DEFAULT 'inondation' CHECK(type IN ('inondation','voie_barree','panne_electrique')),
   lat REAL NOT NULL,
   lng REAL NOT NULL,
+  -- Ville et quartier exact saisis par la personne qui signale (en plus du
+  -- point posé sur la carte) — permet de classer/filtrer et de retrouver
+  -- rapidement les signalements d'une zone sans avoir à lire la carte.
+  ville TEXT,
+  quartier TEXT,
   description TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   resolved_at TEXT,
@@ -258,6 +268,7 @@ CREATE TABLE IF NOT EXISTS flood_alerts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_flood_alerts_active ON flood_alerts(resolved_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_flood_alerts_type ON flood_alerts(type);
 `);
 
 // Ajout défensif de colonnes sur une base déjà existante (pas de framework de
@@ -281,6 +292,9 @@ ensureColumn('deliveries', 'return_reason TEXT');
 ensureColumn('deliveries', 'return_fee INTEGER NOT NULL DEFAULT 0');
 ensureColumn('deliveries', 'return_requested_at TEXT');
 ensureColumn('deliveries', 'return_completed_at TEXT');
+ensureColumn('flood_alerts', "type TEXT NOT NULL DEFAULT 'inondation'");
+ensureColumn('flood_alerts', 'ville TEXT');
+ensureColumn('flood_alerts', 'quartier TEXT');
 
 // Index sur les nouvelles colonnes : après ensureColumn (une base déjà
 // existante n'a le groupe qu'à partir d'ici, pas dans le CREATE TABLE
