@@ -155,14 +155,23 @@ export function computeReturnFee(price) {
   return Math.round((price * RETURN_FEE_RATIO) / 10) * 10;
 }
 
-// --- Alerte route inondée (saison des pluies) ---
+// --- Signalements route/voirie (inondation, voie barrée, panne électrique) ---
 //
 // Signalement manuel par un client ou un livreur : aucune donnée fiable sur
-// l'état réel des routes de Cotonou en saison des pluies n'est disponible
-// automatiquement, donc l'alerte repose entièrement sur ce que les
-// utilisateurs signalent eux-mêmes. Une alerte reste "active" un temps
-// limité (l'eau se retire en quelques heures) et peut être levée plus tôt
-// par son auteur ou par l'admin. Rayon large exprès : un axe inondé gêne
-// tout le monde à proximité, pas seulement le point exact signalé.
+// l'état réel des routes/réseaux de Cotonou n'est disponible automatiquement,
+// donc l'alerte repose entièrement sur ce que les utilisateurs signalent
+// eux-mêmes. Chaque type a sa propre durée de vie par défaut, et peut être
+// levée plus tôt par son auteur ou par l'admin. Rayon large exprès : un
+// incident gêne tout le monde à proximité, pas seulement le point exact
+// signalé.
 export const FLOOD_ALERT_RADIUS_KM = 1.5;
-export const FLOOD_ALERT_TTL_HOURS = 6;
+
+export const ALERT_TYPES = {
+  inondation: { label: 'Route inondée', emoji: '🌊', ttlHours: 6 },
+  voie_barree: { label: 'Voie barrée (travaux publics)', emoji: '🚧', ttlHours: 72 },
+  panne_electrique: { label: 'Panne électrique / poteau tombé', emoji: '⚡', ttlHours: 24 },
+};
+
+// Conservé pour compatibilité : égal à la durée de vie du type "inondation",
+// le seul qui existait avant l'ajout des voies barrées et pannes électriques.
+export const FLOOD_ALERT_TTL_HOURS = ALERT_TYPES.inondation.ttlHours;
