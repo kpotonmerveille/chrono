@@ -1,17 +1,21 @@
 import { Router } from 'express';
 import db from '../db.js';
 import { authRequired } from '../auth.js';
-import { haversineKm, FLOOD_ALERT_RADIUS_KM, FLOOD_ALERT_TTL_HOURS } from '../pricing.js';
+import { haversineKm, FLOOD_ALERT_RADIUS_KM, ALERT_TYPES } from '../pricing.js';
 
 const router = Router();
 
 const MAX_DESCRIPTION_LENGTH = 300;
+const ALERT_TYPE_KEYS = Object.keys(ALERT_TYPES);
 
 // Une alerte est "active" si elle n'a pas été levée et qu'elle n'a pas
-// dépassé sa durée de vie (l'eau se retire en quelques heures en général) —
-// voir FLOOD_ALERT_TTL_HOURS. Le calcul se fait côté SQL pour rester exact
-// même si le serveur tourne plusieurs jours sans redémarrer.
-const ACTIVE_CLAUSE = `resolved_at IS NULL AND created_at > datetime('now', '-${FLOOD_ALERT_TTL_HOURS} hours')`;
+// dépassé la durée de vie propre à SON type (voir ALERT_TYPES dans
+// pricing.js — une voie barrée pour travaux dure plus longtemps qu'une route
+// inondée, par exemple). Le calcul se fait côté SQL pour rester exact même
+// si le serveur tourne plusieurs jours sans redémarrer.
+const ACTIVE_CLAUSE = `resolved_at IS NULL AND (${ALERT_TYPE_KEYS
+  .map((key) => `(type = '${key}' AND created_at > datetime('now', '-${ALERT_TYPES[key].ttlHours} hours'))`)
+  .join(' OR ')})`;
 
 function attachReporter(alert) {
   if (!alert) return alert;
@@ -19,22 +23,29 @@ function attachReporter(alert) {
   return { ...alert, reporter_name: reporter?.name || null, reporter_role: reporter?.role || null };
 }
 
-// Un client ou un livreur signale qu'une route est inondée/impraticable à un
-// endroit précis, avec une courte description optionnelle (repère, gravité).
-// Purement déclaratif : aucune vérification automatique de l'information.
+// Un client ou un livreur signale un incident (route inondée, voie barrée
+// pour travaux, panne électrique/poteau tombé) à un endroit précis, avec la
+// ville, le quartier exact et une courte description optionnelle. Purement
+// déclaratif : aucune vérification automatique de l'information.
 router.post('/', authRequired, (req, res) => {
-  const { lat, lng, description } = req.body;
+  const { type, lat, lng, ville, quartier, description } = req.body;
+  if (!ALERT_TYPE_KEYS.includes(type)) {
+    return res.status(400).json({ error: `Type de signalement invalide (attendu : ${ALERT_TYPE_KEYS.join(', ')})` });
+  }
   if (typeof lat !== 'number' || typeof lng !== 'number') {
-    return res.status(400).json({ error: 'Position (lat/lng) requise pour signaler une route inondée' });
+    return res.status(400).json({ error: 'Position (lat/lng) requise pour signaler un incident' });
+  }
+  if (!quartier || !quartier.trim()) {
+    return res.status(400).json({ error: 'Le quartier exact est requis' });
   }
   if (description && description.length > MAX_DESCRIPTION_LENGTH) {
     return res.status(400).json({ error: `Description trop longue (max ${MAX_DESCRIPTION_LENGTH} caractères)` });
   }
 
   const result = db.prepare(`
-    INSERT INTO flood_alerts (reporter_id, lat, lng, description)
-    VALUES (?, ?, ?, ?)
-  `).run(req.user.id, lat, lng, description?.trim() || null);
+    INSERT INTO flood_alerts (reporter_id, type, lat, lng, ville, quartier, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(req.user.id, type, lat, lng, ville?.trim() || null, quartier.trim(), description?.trim() || null);
 
   const alert = db.prepare('SELECT * FROM flood_alerts WHERE id = ?').get(result.lastInsertRowid);
   res.status(201).json({ alerte: attachReporter(alert) });
@@ -42,7 +53,9 @@ router.post('/', authRequired, (req, res) => {
 
 // Liste des alertes actives, pour affichage sur une carte ou en liste (client
 // et livreur, la sécurité routière concerne tout le monde). Les plus
-// récentes d'abord.
+// récentes d'abord. Le filtrage par ville/quartier/type et la recherche se
+// font côté client (peu de volume, pas besoin d'aller-retour serveur à
+// chaque frappe).
 router.get('/', authRequired, (req, res) => {
   const rows = db.prepare(`
     SELECT * FROM flood_alerts
@@ -54,9 +67,10 @@ router.get('/', authRequired, (req, res) => {
 });
 
 // Vérifie si un trajet (retrait et/ou livraison) passe à proximité d'une
-// alerte active — appelé pendant l'estimation d'une nouvelle demande, sur le
-// même principe que GET /deliveries/groupable : un simple avertissement
-// informatif, qui ne bloque jamais la création de la demande.
+// alerte active, quel que soit son type — appelé pendant l'estimation d'une
+// nouvelle demande, sur le même principe que GET /deliveries/groupable : un
+// simple avertissement informatif, qui ne bloque jamais la création de la
+// demande.
 router.get('/proximite', authRequired, (req, res) => {
   const pickupLat = req.query.pickup_lat !== undefined ? Number(req.query.pickup_lat) : null;
   const pickupLng = req.query.pickup_lng !== undefined ? Number(req.query.pickup_lng) : null;
@@ -83,7 +97,7 @@ router.get('/proximite', authRequired, (req, res) => {
   res.json({ alertes: matches });
 });
 
-// L'auteur du signalement (l'eau s'est retirée) ou l'admin (nettoyage/faux
+// L'auteur du signalement (l'incident est résolu) ou l'admin (nettoyage/faux
 // signalement) peut lever une alerte avant sa durée de vie normale.
 router.post('/:id/resoudre', authRequired, (req, res) => {
   const alert = db.prepare('SELECT * FROM flood_alerts WHERE id = ?').get(req.params.id);
